@@ -1,0 +1,54 @@
+name: fetch-any-file
+
+# 用途：借 GitHub Actions 的境外服务器把任意下载地址抓下来，做成 Release 资产。
+# 用于 downloads.claude.ai 这类本地连不上的地址。
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: '完整下载地址'
+        required: true
+        default: 'https://downloads.claude.ai/claude-code-releases/2.1.330/linux-x64/claude.zst'
+      asset:
+        description: '保存的文件名'
+        required: true
+        default: 'claude-linux-x64-2.1.330.zst'
+      tag:
+        description: 'Release tag 名'
+        required: true
+        default: 'claude-linux-2.1.330'
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Download
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          curl -fL --retry 5 --retry-delay 10 --retry-all-errors \
+               --connect-timeout 30 -C - -o "out/${{ inputs.asset }}" "${{ inputs.url }}"
+          ls -l "out/${{ inputs.asset }}"
+
+      - name: Checksums
+        run: |
+          cd out
+          sha256sum * | tee SHA256SUMS.txt
+
+      - name: Publish as release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          gh release delete "$TAG" -R "${{ github.repository }}" --yes 2>/dev/null || true
+          gh release create "$TAG" out/* -R "${{ github.repository }}" \
+            --title "${{ inputs.asset }}" \
+            --notes "auto-fetched from ${{ inputs.url }}" \
+            --latest=false
+          gh release view "$TAG" -R "${{ github.repository }}"
