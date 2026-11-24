@@ -1,0 +1,64 @@
+name: fetch-claude-vm-bundle
+
+# 用途：借 GitHub Actions 的服务器（境外、能访问 downloads.claude.ai）
+# 把 Claude Desktop Cowork 的 Linux VM 镜像下载下来，做成 Release 资产，
+# 再在本地通过 GitHub / gh-proxy 取回。
+#
+# 手动触发：仓库 Actions 页面 → 选这个 workflow → Run workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_sha:
+        description: 'VM bundle 路径段（取自 main.log 里的 /vms/linux/x64/<这个>/）'
+        required: true
+        default: '37817e321a4a5cfd1b8a667aa82bff9a55fb8f3b'
+      tag:
+        description: 'Release tag 名'
+        required: true
+        default: 'claude-vm-37817e32'
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Show target
+        run: |
+          echo "bundle_sha=${{ inputs.bundle_sha }}"
+          echo "disk:"
+          df -h /
+
+      - name: Download bundle files
+        run: |
+          set -euo pipefail
+          BASE="https://downloads.claude.ai/vms/linux/x64/${{ inputs.bundle_sha }}"
+          mkdir -p out
+          for f in rootfs.vhdx.zst vmlinuz.zst initrd.zst; do
+            echo "=== $f"
+            curl -fL --retry 5 --retry-delay 10 --retry-all-errors \
+                 --connect-timeout 30 -C - -o "out/$f" "$BASE/$f"
+            ls -lh "out/$f"
+          done
+
+      - name: Checksums
+        run: |
+          cd out
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish as release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          gh release delete "$TAG" --yes 2>/dev/null || true
+          gh release create "$TAG" out/* \
+            --title "Claude VM bundle ${{ inputs.bundle_sha }}" \
+            --notes "auto-fetched from downloads.claude.ai by GitHub Actions" \
+            --latest=false
+          gh release view "$TAG"
